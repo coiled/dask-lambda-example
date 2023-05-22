@@ -3,7 +3,9 @@ import hashlib
 from aws_cdk import (
     aws_events as events,
     aws_lambda as lambda_,
+    aws_iam as iam,
     aws_s3 as s3,
+    aws_s3_notifications as s3_notifications,
     aws_events_targets as targets,
     App,
     BundlingOptions,
@@ -66,6 +68,14 @@ class DaskLambdaExampleStack(Stack):
             environment={"S3_BUCKET": self.bucket.bucket_name},
         )
 
+        self.lambda_producer.add_to_role_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["s3:PutObject"],
+                resources=[self.bucket.bucket_arn, f"{self.bucket.bucket_arn}/*"],
+            )
+        )
+
         # Invoke at regular intervals to produce new files
         rule = events.Rule(
             self, "S3ProducerRule", schedule=events.Schedule.rate(Duration.minutes(1))
@@ -84,7 +94,10 @@ class DaskLambdaExampleStack(Stack):
             runtime=lambda_.Runtime.PYTHON_3_10,
             layers=[self.dask_processing_layer, self.dask_dependencies_layer],
         )
-        # TODO: Event for new files on bucket
+
+        # Trigger consumer
+        notification = s3_notifications.LambdaDestination(self.lambda_consumer)
+        self.bucket.add_event_notification(s3.EventType.OBJECT_CREATED, notification)
 
     def make_lambda_start_stop_cluster(self):
         src_file = pathlib.Path(__file__).parent.joinpath("src/lambda_consumer.py")

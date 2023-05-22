@@ -12,7 +12,7 @@ def process_s3_file(bucket, key):
     # which runs on Lambda and may not have heavier libs,
     # doesn't get imported there.
     data = dd.read_json(f"s3://{bucket}/{key}")
-    count = data['count'].compute()[0]
+    count = data["count"].compute()[0]
 
     # Example processing:
     # We are just going to create some busy work by
@@ -26,5 +26,5 @@ def process_s3_file(bucket, key):
     now = datetime.utcnow()
     start = now - timedelta(days=count)
     timeseries = dask.datasets.timeseries(start, now)
-    result = timeseries.groupby('x').mean().y.std().compute()
+    result = timeseries.groupby("x").mean().y.std().compute()
     return result
