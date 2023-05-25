@@ -130,21 +130,17 @@ class DaskLambdaExampleStack(Stack):
         """
         Layer which bridges Lambda client with code running on workers
         """
+        command = "pip install --no-cache -r requirements.txt -t /asset-output/python"
+        asset_key = pathlib.Path("./requirements.txt").read_bytes() + command.encode()
         self.dask_dependencies_layer = lambda_.LayerVersion(
             self,
             "dask_dependencies_layer",
             code=lambda_.Code.from_asset(
                 "./",
-                asset_hash=hashlib.md5(
-                    pathlib.Path("./requirements.txt").read_bytes()
-                ).hexdigest(),
+                asset_hash=hashlib.md5(asset_key).hexdigest(),
                 bundling=BundlingOptions(
                     image=lambda_.Runtime.PYTHON_3_10.bundling_image,
-                    command=[
-                        "bash",
-                        "-c",
-                        "pip install --no-cache -r requirements.txt -t /asset-output",
-                    ],
+                    command=["bash", "-c", command],
                 ),
             ),
             description="Dask dependencies (coiled, dask, distributed, etc)",
