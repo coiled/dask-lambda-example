@@ -26,7 +26,7 @@ def process_s3_file(bucket, key):
     # to S3, Redshift, etc would be more useful.
 
     end = datetime.utcnow()
-    start = end - timedelta(hours=count)
+    start = end - timedelta(days=count)
     timeseries = dask.datasets.timeseries(start, end)
     result = timeseries.groupby("name").mean().y.std().compute()
     return result
