@@ -31,7 +31,7 @@ def connect_to_cluster(error_no_cluster=False):
             cluster_name = metadata.get("CLUSTER_NAME")
             if cluster_name:
                 cluster = coiled.Cluster(
-                    name=cluster_name, shutdown_on_close=False, credentials=None
+                    name=cluster_name, shutdown_on_close=False, credentials="local"
                 )
                 client = cluster.get_client()
             elif error_no_cluster:
@@ -44,7 +44,6 @@ def connect_to_cluster(error_no_cluster=False):
         return wrapper
 
     return inner
-
 
 @connect_to_cluster(error_no_cluster=True)
 def consumer(event, context, client):
@@ -61,7 +60,11 @@ def consumer(event, context, client):
 
     # Get bucket and key of file triggering this function
     bucket = event["Records"][0]["s3"]["bucket"]["name"]
-    key = event["Records"][0]["s3"]["object"]["key"]
+    key = event["Records"][0]["s3"]["object"]["key"].replace("%3D", "=")
+
+    value = boto3.client("s3").get_object(Bucket=bucket, Key=key)["Body"].read()
+    print(value)
+
 
     # Offload the processing to the cluster
     job = client.submit(process_s3_file, bucket, key)
@@ -86,7 +89,7 @@ def start_stop_cluster(event, context, client):
             name=f"processing-cluster-{date.year}-{date.month}-{date.day}",
             software=_software_environment(),
             shutdown_on_close=False,
-            n_workers=2,
+            n_workers=4,
             worker_cpu=2,
         )
         client = cluster.get_client()
@@ -98,7 +101,7 @@ def start_stop_cluster(event, context, client):
     elif event["action"] == "stop":
         if client is None:
             return  # No cluster
-        client.shutdown()
+        client.cluster.shutdown()
         _update_secret()
     else:
         raise ValueError(f"Unknown action '{event['action']}'")
@@ -124,9 +127,9 @@ def _current_environment():
     # return subprocess.check_output(cmd.split()).decode().splitlines()
     # This would 'ideally' work, but technically with layers they aren't
     # installed packages, only in the PYTHONPATH so aren't caught.
-    # Instead (probably a better way?) we stored them in an env var since 
+    # Instead (probably a better way?) we stored them in an env var since
     # there aren't many.
-    return os.environ['INSTALLED_PKGS'].splitlines()
+    return os.environ["INSTALLED_PKGS"].splitlines()
 
 
 def _software_environment():

@@ -22,6 +22,6 @@ def producer(event, context):
     d = datetime.utcnow()
     key = f"data/year={d.year}/month={d.month}/day={d.day}/hour={d.hour}/minute={d.minute}/second={d.second}/data.json"
 
-    data = json.dumps({"count": random.randint(10, 10_000)}).encode()
+    data = json.dumps({"count": random.randint(10, 1_000)}).encode()
 
     boto3.client("s3").put_object(Bucket=bucket, Key=key, Body=data)

@@ -76,15 +76,15 @@ class DaskLambdaExampleStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
         )
-
-        # All reading from anything in our account this stack is deployed in
         self.bucket.add_to_resource_policy(
             iam.PolicyStatement(
+                sid="AllowReadingFromThisAccount",
                 effect=iam.Effect.ALLOW,
-                actions=["s3:Get*", "s3:List*"],
-                resources=[self.bucket.arn_for_objects("*")],
-                principals=[
-                    iam.AccountPrincipal(self.account),
+                principals=[iam.AccountRootPrincipal()],
+                actions=["s3:List*", "s3:Get*"],
+                resources=[
+                    self.bucket.bucket_arn,
+                    f"{self.bucket.bucket_arn}/*",
                 ],
             )
         )
@@ -142,7 +142,7 @@ class DaskLambdaExampleStack(Stack):
             description="Example of Dask client from Lambda, coordinating work on remote cluster",
             code=lambda_.InlineCode(src_file.read_text()),
             handler="index.consumer",
-            timeout=Duration.seconds(5),
+            timeout=Duration.seconds(10),
             runtime=lambda_.Runtime.PYTHON_3_10,
             layers=[self.dask_processing_layer, self.dask_dependencies_layer],
             environment={
@@ -164,14 +164,29 @@ class DaskLambdaExampleStack(Stack):
         self.lambda_consumer.add_to_role_policy(
             iam.PolicyStatement(
                 effect=iam.Effect.ALLOW,
-                actions=["s3:GetObject"],
-                resources=[self.bucket.arn_for_objects("*")],
+                actions=["s3:Get*", "s3:List*"],
+                resources=[self.bucket.arn_for_objects("*"), self.bucket.bucket_arn],
             )
         )
 
         # Trigger consumer
         notification = s3_notifications.LambdaDestination(self.lambda_consumer)
         self.bucket.add_event_notification(s3.EventType.OBJECT_CREATED, notification)
+
+        # Add bucket policy that this function, and thus cluster's inherited role
+        # will have access to read the bucket
+        self.bucket.add_to_resource_policy(
+            iam.PolicyStatement(
+                sid="AllowReadingFromForLambdaConsumerRole",
+                effect=iam.Effect.ALLOW,
+                principals=[iam.ArnPrincipal(self.lambda_consumer.role.role_arn)],
+                actions=["s3:List*", "s3:Get*"],
+                resources=[
+                    self.bucket.bucket_arn,
+                    f"{self.bucket.bucket_arn}/*",
+                ],
+            )
+        )
 
     def make_lambda_start_stop_cluster(self):
         src_file = pathlib.Path(__file__).parent.joinpath("src/lambda_consumer.py")
@@ -188,7 +203,7 @@ class DaskLambdaExampleStack(Stack):
             layers=[self.dask_processing_layer, self.dask_dependencies_layer],
             environment={
                 "SECRET_ARN": self.secret.secret_arn,
-                "INSTALLED_PKGS": pathlib.Path('requirements.txt').read_text(),
+                "INSTALLED_PKGS": pathlib.Path("requirements.txt").read_text(),
                 "DASK_COILED__TOKEN": self.coiled_token.value_as_string,
                 "DASK_COILED__ACCOUNT": self.coiled_account.value_as_string,
                 "DASK_COILED__USER": self.coiled_user.value_as_string,
