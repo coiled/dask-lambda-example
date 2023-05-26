@@ -182,11 +182,13 @@ class DaskLambdaExampleStack(Stack):
             description="Example of starting and stopping a Dask cluster using coiled",
             code=lambda_.InlineCode(src_file.read_text()),
             handler="index.start_stop_cluster",
-            timeout=Duration.seconds(5),
+            timeout=Duration.minutes(10),  # Time for creating software envs / cluster
             runtime=lambda_.Runtime.PYTHON_3_10,
+            memory_size=1024,
             layers=[self.dask_processing_layer, self.dask_dependencies_layer],
             environment={
                 "SECRET_ARN": self.secret.secret_arn,
+                "INSTALLED_PKGS": pathlib.Path('requirements.txt').read_text(),
                 "DASK_COILED__TOKEN": self.coiled_token.value_as_string,
                 "DASK_COILED__ACCOUNT": self.coiled_account.value_as_string,
                 "DASK_COILED__USER": self.coiled_user.value_as_string,
@@ -197,7 +199,10 @@ class DaskLambdaExampleStack(Stack):
         self.lambda_start_stop_cluster.add_to_role_policy(
             iam.PolicyStatement(
                 effect=iam.Effect.ALLOW,
-                actions=["secretsmanager:PutSecretValue"],
+                actions=[
+                    "secretsmanager:PutSecretValue",
+                    "secretsmanager:GetSecretValue",
+                ],
                 resources=[self.secret.secret_arn],
             )
         )

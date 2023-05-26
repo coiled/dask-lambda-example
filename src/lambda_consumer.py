@@ -11,6 +11,7 @@ import boto3
 import coiled
 from distributed import Client, wait, PipInstall
 
+import dask_processing
 from dask_processing import process_s3_file
 
 
@@ -88,6 +89,11 @@ def start_stop_cluster(event, context, client):
             n_workers=2,
             worker_cpu=2,
         )
+        client = cluster.get_client()
+
+        # cluster created with software env due to needing superset of current env
+        # and no 'mixed' package_sync w/ software env but it will need the processing module
+        client.upload_file(dask_processing.__file__)
         _update_secret(cluster.get_client())
     elif event["action"] == "stop":
         if client is None:
@@ -105,6 +111,7 @@ def _update_secret(client=None):
             {}
             if client is None
             else {
+                "CLUSTER_NAME": client.cluster.name,
                 "SCHEDULER_ADDR": client.scheduler.address,
                 "DASHBOARD_ADDR": client.dashboard_link,
             }
@@ -113,8 +120,13 @@ def _update_secret(client=None):
 
 
 def _current_environment():
-    cmd = sys.executable + " -m pip freeze"
-    return subprocess.check_output().decode().splitlines()
+    # cmd = sys.executable + " -m pip freeze"
+    # return subprocess.check_output(cmd.split()).decode().splitlines()
+    # This would 'ideally' work, but technically with layers they aren't
+    # installed packages, only in the PYTHONPATH so aren't caught.
+    # Instead (probably a better way?) we stored them in an env var since 
+    # there aren't many.
+    return os.environ['INSTALLED_PKGS'].splitlines()
 
 
 def _software_environment():
@@ -124,4 +136,5 @@ def _software_environment():
     deps.extend(["dask[dataframe]", "s3fs", "bokeh==2.4.2"])
     env_hash = hashlib.md5("".join(deps).encode()).hexdigest()[:5]
     name = f"milesg-processing-cluster-{env_hash}"
-    return coiled.create_software_environment(name=name, pip=deps)
+    coiled.create_software_environment(name=name, pip=deps)
+    return name
