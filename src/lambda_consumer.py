@@ -1,12 +1,15 @@
+import sys
 import os
 import random
 import json
 import functools
+import subprocess
+import hashlib
 from datetime import datetime
 
 import boto3
 import coiled
-from distributed import Client, wait
+from distributed import Client, wait, PipInstall
 
 from dask_processing import process_s3_file
 
@@ -21,11 +24,15 @@ def connect_to_cluster(error_no_cluster=False):
         @functools.wraps(f)
         def wrapper(event, context):
             client = boto3.client("secretsmanager")
-            resp = client.get_secret_value(SecretId="CLUSTER_METADATA")
+            resp = client.get_secret_value(SecretId=os.environ["SECRET_ARN"])
             metadata = json.loads(resp["SecretString"])
 
-            if "cluster-addr" in metadata:
-                client = Client(metadata["cluster-addr"])
+            cluster_name = metadata.get("CLUSTER_NAME")
+            if cluster_name:
+                cluster = coiled.Cluster(
+                    name=cluster_name, shutdown_on_close=False, credentials=None
+                )
+                client = cluster.get_client()
             elif error_no_cluster:
                 raise RuntimeError("No running cluster found.")
             else:
@@ -34,6 +41,8 @@ def connect_to_cluster(error_no_cluster=False):
             return f(event, context, client)
 
         return wrapper
+
+    return inner
 
 
 @connect_to_cluster(error_no_cluster=True)
@@ -57,7 +66,7 @@ def consumer(event, context, client):
     job = client.submit(process_s3_file, bucket, key)
     wait(job)
 
-    print(job.result())
+    return
 
 
 @connect_to_cluster(error_no_cluster=False)
@@ -74,10 +83,45 @@ def start_stop_cluster(event, context, client):
         date = datetime.utcnow()
         cluster = coiled.Cluster(
             name=f"processing-cluster-{date.year}-{date.month}-{date.day}",
+            software=_software_environment(),
+            shutdown_on_close=False,
+            n_workers=2,
+            worker_cpu=2,
         )
+        _update_secret(cluster.get_client())
     elif event["action"] == "stop":
         if client is None:
             return  # No cluster
         client.shutdown()
+        _update_secret()
     else:
         raise ValueError(f"Unknown action '{event['action']}'")
+
+
+def _update_secret(client=None):
+    boto3.client("secretsmanager").put_secret_value(
+        SecretId=os.environ["SECRET_ARN"],
+        SecretString=json.dumps(
+            {}
+            if client is None
+            else {
+                "SCHEDULER_ADDR": client.scheduler.address,
+                "DASHBOARD_ADDR": client.dashboard_link,
+            }
+        ),
+    )
+
+
+def _current_environment():
+    cmd = sys.executable + " -m pip freeze"
+    return subprocess.check_output().decode().splitlines()
+
+
+def _software_environment():
+    # TODO: Software environment combined with package_sync
+    # since we want a superset of current env
+    deps = _current_environment()
+    deps.extend(["dask[dataframe]", "s3fs", "bokeh==2.4.2"])
+    env_hash = hashlib.md5("".join(deps).encode()).hexdigest()[:5]
+    name = f"milesg-processing-cluster-{env_hash}"
+    return coiled.create_software_environment(name=name, pip=deps)

@@ -7,6 +7,9 @@ from aws_cdk import (
     aws_s3 as s3,
     aws_s3_notifications as s3_notifications,
     aws_events_targets as targets,
+    aws_secretsmanager as secretsmanager,
+    CfnParameter,
+    SecretValue,
     App,
     BundlingOptions,
     Duration,
@@ -37,8 +40,27 @@ class DaskLambdaExampleStack(Stack):
 
     def __init__(self, app: App, id: str) -> None:
         super().__init__(app, id)
+        self.coiled_token = CfnParameter(
+            self,
+            "CoiledToken",
+            type="String",
+            description="Coiled Token: realistically, already saved and retreive from SecretsManger",
+        )
+        self.coiled_account = CfnParameter(
+            self,
+            "CoiledAccount",
+            type="String",
+            description="Coiled Account: realistically, already saved and retreive from SecretsManger",
+        )
+        self.coiled_user = CfnParameter(
+            self,
+            "CoiledUser",
+            type="String",
+            description="Coiled User: realistically, already saved and retreive from SecretsManger",
+        )
 
         self.make_bucket()
+        self.make_secret()
 
         self.make_dask_dependencies_layer()
         self.make_dask_processing_layer()
@@ -50,9 +72,33 @@ class DaskLambdaExampleStack(Stack):
     def make_bucket(self):
         self.bucket = s3.Bucket(
             self,
-            "example-data-bucket",
-            access_control=s3.BucketAccessControl.BUCKET_OWNER_FULL_CONTROL,
+            "example2-data-bucket",
+            removal_policy=RemovalPolicy.DESTROY,
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+        )
+
+        # All reading from anything in our account this stack is deployed in
+        self.bucket.add_to_resource_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["s3:Get*", "s3:List*"],
+                resources=[self.bucket.arn_for_objects("*")],
+                principals=[
+                    iam.AccountPrincipal(self.account),
+                ],
+            )
+        )
+
+    def make_secret(self):
+        self.secret = secretsmanager.Secret(
+            self,
+            "Secret",
+            description="Connection information to running Dask Cluster",
+            secret_object_value={
+                "CLUSTER_NAME": SecretValue.unsafe_plain_text(""),
+                "SCHEDULER_ADDR": SecretValue.unsafe_plain_text(""),
+                "DASHBOARD_ADDR": SecretValue.unsafe_plain_text(""),
+            },
         )
 
     def make_lambda_producer(self):
@@ -61,13 +107,18 @@ class DaskLambdaExampleStack(Stack):
         self.lambda_producer = lambda_.Function(
             self,
             "ExampleProducerFunction",
+            description="Example producer function. Generating example data for processing",
             code=lambda_.InlineCode(src_file.read_text()),
             handler="index.producer",
             timeout=Duration.seconds(5),
             runtime=lambda_.Runtime.PYTHON_3_10,
-            environment={"S3_BUCKET": self.bucket.bucket_name},
+            environment={
+                "S3_BUCKET": self.bucket.bucket_name,
+                "SECRET_ARN": self.secret.secret_arn,
+            },
         )
 
+        # Allow this function to write to s3
         self.lambda_producer.add_to_role_policy(
             iam.PolicyStatement(
                 effect=iam.Effect.ALLOW,
@@ -88,11 +139,34 @@ class DaskLambdaExampleStack(Stack):
         self.lambda_consumer = lambda_.Function(
             self,
             "ExampleConsumerFunction",
+            description="Example of Dask client from Lambda, coordinating work on remote cluster",
             code=lambda_.InlineCode(src_file.read_text()),
             handler="index.consumer",
             timeout=Duration.seconds(5),
             runtime=lambda_.Runtime.PYTHON_3_10,
             layers=[self.dask_processing_layer, self.dask_dependencies_layer],
+            environment={
+                "SECRET_ARN": self.secret.secret_arn,
+                "DASK_COILED__TOKEN": self.coiled_token.value_as_string,
+                "DASK_COILED__ACCOUNT": self.coiled_account.value_as_string,
+                "DASK_COILED__USER": self.coiled_user.value_as_string,
+            },
+        )
+
+        # Get cluster connection info permission
+        self.lambda_consumer.add_to_role_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["secretsmanager:GetSecretValue"],
+                resources=[self.secret.secret_arn],
+            )
+        )
+        self.lambda_consumer.add_to_role_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["s3:GetObject"],
+                resources=[self.bucket.arn_for_objects("*")],
+            )
         )
 
         # Trigger consumer
@@ -105,13 +179,45 @@ class DaskLambdaExampleStack(Stack):
         self.lambda_start_stop_cluster = lambda_.Function(
             self,
             "StartStopClusterFunction",
+            description="Example of starting and stopping a Dask cluster using coiled",
             code=lambda_.InlineCode(src_file.read_text()),
             handler="index.start_stop_cluster",
             timeout=Duration.seconds(5),
             runtime=lambda_.Runtime.PYTHON_3_10,
             layers=[self.dask_processing_layer, self.dask_dependencies_layer],
+            environment={
+                "SECRET_ARN": self.secret.secret_arn,
+                "DASK_COILED__TOKEN": self.coiled_token.value_as_string,
+                "DASK_COILED__ACCOUNT": self.coiled_account.value_as_string,
+                "DASK_COILED__USER": self.coiled_user.value_as_string,
+            },
         )
-        # TODO: Scheduled events to start/stop cluster
+
+        # Update cluster connection info permission
+        self.lambda_start_stop_cluster.add_to_role_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["secretsmanager:PutSecretValue"],
+                resources=[self.secret.secret_arn],
+            )
+        )
+        # Trigger start/stop cluster
+        for action, schedule in (
+            ("start", "cron(0 7 ? * 1-6 *)"),  # Weekdays 7am
+            ("stop", "cron(0 17 ? * 1-6 *)"),  # Weekdays 5pm
+        ):
+            events.Rule(
+                self,
+                f"{action.capitalize()}Cluster",
+                description=f"Schedule {action} of Dask cluster",
+                schedule=events.Schedule.expression(schedule),
+                targets=[
+                    targets.LambdaFunction(
+                        self.lambda_start_stop_cluster,
+                        event=events.RuleTargetInput.from_object({"action": action}),
+                    )
+                ],
+            )
 
     def make_dask_processing_layer(self):
         """

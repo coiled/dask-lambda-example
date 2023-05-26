@@ -1,17 +1,21 @@
 from datetime import datetime, timedelta
 import boto3
-import dask
-import dask.dataframe as dd
-
+import pathlib
 
 def process_s3_file(bucket, key):
     """
     Process a s3 file
     """
+    import dask
+    import dask.dataframe as dd
+
     # **NOTE** Import any external deps here, so the client
     # which runs on Lambda and may not have heavier libs,
     # doesn't get imported there.
-    data = dd.read_json(f"s3://{bucket}/{key}")
+    obj = boto3.client('s3').get_object(Bucket=bucket, Key=key)['Body'].read()
+    file = pathlib.Path('/tmp/data.json')
+    file.write_bytes(obj)
+    data = dd.read_json(str(file))
     count = data["count"].compute()[0]
 
     # Example processing:
