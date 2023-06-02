@@ -142,8 +142,8 @@ class DaskLambdaExampleStack(Stack):
             description="Example of Dask client from Lambda, coordinating work on remote cluster",
             code=lambda_.InlineCode(src_file.read_text()),
             handler="index.consumer",
-            # time waiting for cluster to process task, can be lower with 'fire-and-forget'            
-            timeout=Duration.minutes(5), 
+            # time waiting for cluster to process task, can be lower with 'fire-and-forget'
+            timeout=Duration.minutes(5),
             runtime=lambda_.Runtime.PYTHON_3_10,
             layers=[self.dask_processing_layer, self.dask_dependencies_layer],
             environment={

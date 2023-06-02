@@ -3,6 +3,7 @@ import json
 import boto3
 import pathlib
 
+
 def process_s3_file(bucket, key):
     """
     Process a s3 file
@@ -13,8 +14,8 @@ def process_s3_file(bucket, key):
     # **NOTE** Import any external deps here, so the client
     # which runs on Lambda and may not have heavier libs,
     # doesn't get imported there.
-    resp = boto3.client('s3').get_object(Bucket=bucket, Key=key)
-    count = json.loads(resp['Body'].read().decode())['count']
+    resp = boto3.client("s3").get_object(Bucket=bucket, Key=key)
+    count = json.loads(resp["Body"].read().decode())["count"]
 
     # Example processing:
     # We are just going to create some busy work by

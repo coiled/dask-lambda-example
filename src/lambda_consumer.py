@@ -34,6 +34,7 @@ def connect_to_cluster(error_no_cluster=False):
                     name=cluster_name, shutdown_on_close=False, credentials="local"
                 )
                 client = cluster.get_client()
+                client.upload_file(dask_processing.__file__)
             elif error_no_cluster:
                 raise RuntimeError("No running cluster found.")
             else:
@@ -44,6 +45,7 @@ def connect_to_cluster(error_no_cluster=False):
         return wrapper
 
     return inner
+
 
 @connect_to_cluster(error_no_cluster=True)
 def consumer(event, context, client):
@@ -64,7 +66,6 @@ def consumer(event, context, client):
 
     value = boto3.client("s3").get_object(Bucket=bucket, Key=key)["Body"].read()
     print(value)
-
 
     # Offload the processing to the cluster
     job = client.submit(process_s3_file, bucket, key)
@@ -93,11 +94,7 @@ def start_stop_cluster(event, context, client):
             worker_cpu=2,
         )
         client = cluster.get_client()
-
-        # cluster created with software env due to needing superset of current env
-        # and no 'mixed' package_sync w/ software env but it will need the processing module
-        client.upload_file(dask_processing.__file__)
-        _update_secret(cluster.get_client())
+        _update_secret(client)
     elif event["action"] == "stop":
         if client is None:
             return  # No cluster
