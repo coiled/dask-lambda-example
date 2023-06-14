@@ -1,15 +1,12 @@
-import sys
 import os
-import random
 import json
 import functools
-import subprocess
 import hashlib
 from datetime import datetime
 
 import boto3
 import coiled
-from distributed import Client, wait, PipInstall
+from distributed import wait
 
 import dask_processing
 from dask_processing import process_s3_file
